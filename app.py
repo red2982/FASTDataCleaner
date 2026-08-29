@@ -22,34 +22,34 @@ if uploaded_file is not None:
 
         df = df.drop(columns=[c for c in cols_to_delete if c in df.columns])
 
-       # 2. Bulk Find and Replace Exact
-grades = ['K'] + [str(g) for g in range(1, 13)]
+        # 2. Bulk Find and Replace Exact
+        grades = ['K'] + [str(g) for g in range(1, 13)]
 
-standard_patterns = {
-    'RP': [f'R.1.{i}' for i in range(1, 5)],
-    'RI': [f'R.2.{i}' for i in range(1, 5)],
-    'RGV': [f'R.3.{i}' for i in range(1, 5)] + ['V.1.3', 'V.1.2'],
-}
+        standard_patterns = {
+            'RP': [f'R.1.{i}' for i in range(1, 5)],
+            'RI': [f'R.2.{i}' for i in range(1, 5)],
+            'RGV': [f'R.3.{i}' for i in range(1, 5)] + ['V.1.3', 'V.1.2'],
+        }
 
-disability_codes = [
-    'K - Specific Learning Disability', 'J - Emotional/Behavioral Disability',
-    'P - Autism Spectrum Disorder', 'L - Gifted', 'V - Other Health Impaired',
-    'H - Deaf or Hard of Hearing', 'G - Language Impaired', 'I - Visually Impaired',
-    'F - Speech Impaired', 'W - Intellectual Disabilities', 'M - Hospital Homebound',
-    'C - Orthopedic Impairment', 'O - Dual Sensory Impaired', 'U - Established Conditions',
-    'Z - Other'
-]
+        disability_codes = [
+            'K - Specific Learning Disability', 'J - Emotional/Behavioral Disability',
+            'P - Autism Spectrum Disorder', 'L - Gifted', 'V - Other Health Impaired',
+            'H - Deaf or Hard of Hearing', 'G - Language Impaired', 'I - Visually Impaired',
+            'F - Speech Impaired', 'W - Intellectual Disabilities', 'M - Hospital Homebound',
+            'C - Orthopedic Impairment', 'O - Dual Sensory Impaired', 'U - Established Conditions',
+            'Z - Other'
+        ]
 
-disability_map = {'N - N/A': 'No', **{code: 'Yes' for code in disability_codes}}
+        disability_map = {'N - N/A': 'No', **{code: 'Yes' for code in disability_codes}}
 
-ela_map = {
-    f'{prefix}|ELA.{grade}.{code}': code
-    for grade in grades
-    for prefix, codes in standard_patterns.items()
-    for code in codes
-}
+        ela_map = {
+            f'{prefix}|ELA.{grade}.{code}': code
+            for grade in grades
+            for prefix, codes in standard_patterns.items()
+            for code in codes
+        }
 
-data_map = {**disability_map, **ela_map, 'N/A': ''}
+        data_map = {**disability_map, **ela_map, 'N/A': ''}
         df = df.replace(data_map)
 
         # 3. Convert Wide to Long Format
@@ -103,9 +103,6 @@ data_map = {**disability_map, **ela_map, 'N/A': ''}
             file_name="FAST_Data_Processed.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
-
-    except Exception as e:
-        st.error(f"Error processing file: {e}")
 
     except Exception as e:
         st.error(f"Error processing file: {e}")
