@@ -13,12 +13,13 @@ if uploaded_file is not None:
         df = pd.read_csv(uploaded_file)
         
         # 1. Delete Unwanted Columns
-        cols_to_delete = [
-            'Student ID', 'Student DOB','Ethnicity','Enrolled Grade','Sex','Enrolled School',
-            'Enrolled District', 'Local ID','Testing Location','District Use','Test Reason',
-            'Test OppNumber','Date Taken','Test Completion Date','1. Reading Prose and Poetry Performance',
-            '2. Reading Informational Text Performance','3. Reading Across Genres & Vocabulary Performance','Category'
-        ]
+       cols_to_delete = [
+    'Student ID', 'Student DOB', 'Ethnicity', 'Enrolled Grade', 'Sex', 'Enrolled School',
+    'Enrolled District', 'Local ID', 'Testing Location', 'District Use', 'Test Reason',
+    'Test OppNumber', 'Date Taken', 'Test Completion Date', '1. Reading Prose and Poetry Performance',
+    '2. Reading Informational Text Performance', '3. Reading Across Genres & Vocabulary Performance', 'Category'
+] + [f'{i}. Category' for i in range(1, 73)]
+        
         df = df.drop(columns=[c for c in cols_to_delete if c in df.columns])
 
         # 2. Bulk Find and Replace Exact
