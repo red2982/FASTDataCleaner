@@ -1,6 +1,6 @@
-import streamlit as st
-import pandas as pd
 import io
+import pandas as pd
+import streamlit as st
 
 st.set_page_config(page_title="FAST Data Processor", page_icon="📊", layout="wide")
 st.title("📊 FAST Data Cleaner & Report Generator")
@@ -11,15 +11,15 @@ uploaded_file = st.file_uploader("Choose a raw FAST CSV file", type=["csv"])
 if uploaded_file is not None:
     try:
         df = pd.read_csv(uploaded_file)
-        
+
         # 1. Delete Unwanted Columns
-       cols_to_delete = [
-    'Student ID', 'Student DOB', 'Ethnicity', 'Enrolled Grade', 'Sex', 'Enrolled School',
-    'Enrolled District', 'Local ID', 'Testing Location', 'District Use', 'Test Reason',
-    'Test OppNumber', 'Date Taken', 'Test Completion Date', '1. Reading Prose and Poetry Performance',
-    '2. Reading Informational Text Performance', '3. Reading Across Genres & Vocabulary Performance', 'Category'
-] + [f'{i}. Category' for i in range(1, 73)]
-        
+        cols_to_delete = [
+            'Student ID', 'Student DOB', 'Ethnicity', 'Enrolled Grade', 'Sex', 'Enrolled School',
+            'Enrolled District', 'Local ID', 'Testing Location', 'District Use', 'Test Reason',
+            'Test OppNumber', 'Date Taken', 'Test Completion Date', '1. Reading Prose and Poetry Performance',
+            '2. Reading Informational Text Performance', '3. Reading Across Genres & Vocabulary Performance', 'Category'
+        ] + [f'{i}. Category' for i in range(1, 73)]
+
         df = df.drop(columns=[c for c in cols_to_delete if c in df.columns])
 
         # 2. Bulk Find and Replace Exact
@@ -51,19 +51,21 @@ if uploaded_file is not None:
         for _, row in df.iterrows():
             meta = [row.iloc[0], row.iloc[1], row.iloc[2], row.iloc[3], row.iloc[4], row.iloc[5], row.iloc[6]]
             bench_values = row.iloc[7:].values
-            
+
             for j in range(0, len(bench_values) - 1, 3):
                 bm = bench_values[j]
-                pe = bench_values[j+1] if j+1 < len(bench_values) else None
-                pp = bench_values[j+2] if j+2 < len(bench_values) else None
-                
+                pe = bench_values[j + 1] if j + 1 < len(bench_values) else None
+                pp = bench_values[j + 2] if j + 2 < len(bench_values) else None
+
                 if pd.notna(bm) and pd.notna(pe) and pd.notna(pp) and str(bm).strip() != "":
                     long_data.append(meta + [bm, pe, pp])
 
-        headers = ["Student Name", "504", "Primary Exceptionality", "English Learner", 
-                   "Scale Score", "Level Score", "Percentile Rank", 
-                   "Benchmark", "Points Earned", "Points Possible"]
-        
+        headers = [
+            "Student Name", "504", "Primary Exceptionality", "English Learner",
+            "Scale Score", "Level Score", "Percentile Rank",
+            "Benchmark", "Points Earned", "Points Possible"
+        ]
+
         df_long = pd.DataFrame(long_data, columns=headers)
         df_long['Points Earned'] = pd.to_numeric(df_long['Points Earned'], errors='coerce')
         df_long['Points Possible'] = pd.to_numeric(df_long['Points Possible'], errors='coerce')
@@ -73,7 +75,7 @@ if uploaded_file is not None:
         pivot_possible = df_long.pivot_table(index='Benchmark', columns='Student Name', values='Points Possible', aggfunc='sum', fill_value=0)
 
         st.success("✅ File processed successfully!")
-        
+
         # Display preview tabs
         tab1, tab2 = st.tabs(["📋 Long Data Format", "📊 Benchmark Pivot Summary"])
         with tab1:
@@ -95,6 +97,9 @@ if uploaded_file is not None:
             file_name="FAST_Data_Processed.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
+    except Exception as e:
+        st.error(f"Error processing file: {e}")
 
     except Exception as e:
         st.error(f"Error processing file: {e}")
