@@ -22,28 +22,34 @@ if uploaded_file is not None:
 
         df = df.drop(columns=[c for c in cols_to_delete if c in df.columns])
 
-        # 2. Bulk Find and Replace Exact
-        data_map = {
-            'N - N/A': 'No', 'K - Specific Learning Disability': 'Yes', 'J - Emotional/Behavioral Disability': 'Yes',
-            'P - Autism Spectrum Disorder': 'Yes', 'L - Gifted': 'Yes', 'V - Other Health Impaired': 'Yes',
-            'H - Deaf or Hard of Hearing': 'Yes', 'G - Language Impaired': 'Yes', 'I - Visually Impaired': 'Yes',
-            'F - Speech Impaired': 'Yes', 'W - Intellectual Disabilities': 'Yes', 'M - Hospital Homebound': 'Yes',
-            'C - Orthopedic Impairment': 'Yes', 'O - Dual Sensory Impaired': 'Yes', 'U - Established Conditions': 'Yes',
-            'Z - Other': 'Yes',
-            'RP|ELA.7.R.1.1': 'R.1.1', 'RP|ELA.7.R.1.2': 'R.1.2', 'RP|ELA.7.R.1.3': 'R.1.3', 'RP|ELA.7.R.1.4': 'R.1.4',
-            'RI|ELA.7.R.2.1': 'R.2.1', 'RI|ELA.7.R.2.2': 'R.2.2', 'RI|ELA.7.R.2.3': 'R.2.3', 'RI|ELA.7.R.2.4': 'R.2.4',
-            'RGV|ELA.7.R.3.1': 'R.3.1', 'RGV|ELA.7.R.3.2': 'R.3.2', 'RGV|ELA.7.R.3.3': 'R.3.3', 'RGV|ELA.7.R.3.4': 'R.3.4',
-            'RGV|ELA.7.V.1.3': 'V.1.3', 'RGV|ELA.7.V.1.2': 'V.1.2',
-            'RP|ELA.6.R.1.1': 'R.1.1', 'RP|ELA.6.R.1.2': 'R.1.2', 'RP|ELA.6.R.1.3': 'R.1.3', 'RP|ELA.6.R.1.4': 'R.1.4',
-            'RI|ELA.6.R.2.1': 'R.2.1', 'RI|ELA.6.R.2.2': 'R.2.2', 'RI|ELA.6.R.2.3': 'R.2.3', 'RI|ELA.6.R.2.4': 'R.2.4',
-            'RGV|ELA.6.R.3.1': 'R.3.1', 'RGV|ELA.6.R.3.2': 'R.3.2', 'RGV|ELA.6.R.3.3': 'R.3.3', 'RGV|ELA.6.R.3.4': 'R.3.4',
-            'RGV|ELA.6.V.1.3': 'V.1.3', 'RGV|ELA.6.V.1.2': 'V.1.2',
-            'RP|ELA.8.R.1.1': 'R.1.1', 'RP|ELA.8.R.1.2': 'R.1.2', 'RP|ELA.8.R.1.3': 'R.1.3', 'RP|ELA.8.R.1.4': 'R.1.4',
-            'RI|ELA.8.R.2.1': 'R.2.1', 'RI|ELA.8.R.2.2': 'R.2.2', 'RI|ELA.8.R.2.3': 'R.2.3', 'RI|ELA.8.R.2.4': 'R.2.4',
-            'RGV|ELA.8.R.3.1': 'R.3.1', 'RGV|ELA.8.R.3.2': 'R.3.2', 'RGV|ELA.8.R.3.3': 'R.3.3', 'RGV|ELA.8.R.3.4': 'R.3.4',
-            'RGV|ELA.8.V.1.3': 'V.1.3', 'RGV|ELA.8.V.1.2': 'V.1.2',
-            'N/A': ''
-        }
+       # 2. Bulk Find and Replace Exact
+grades = ['K'] + [str(g) for g in range(1, 13)]
+
+standard_patterns = {
+    'RP': [f'R.1.{i}' for i in range(1, 5)],
+    'RI': [f'R.2.{i}' for i in range(1, 5)],
+    'RGV': [f'R.3.{i}' for i in range(1, 5)] + ['V.1.3', 'V.1.2'],
+}
+
+disability_codes = [
+    'K - Specific Learning Disability', 'J - Emotional/Behavioral Disability',
+    'P - Autism Spectrum Disorder', 'L - Gifted', 'V - Other Health Impaired',
+    'H - Deaf or Hard of Hearing', 'G - Language Impaired', 'I - Visually Impaired',
+    'F - Speech Impaired', 'W - Intellectual Disabilities', 'M - Hospital Homebound',
+    'C - Orthopedic Impairment', 'O - Dual Sensory Impaired', 'U - Established Conditions',
+    'Z - Other'
+]
+
+disability_map = {'N - N/A': 'No', **{code: 'Yes' for code in disability_codes}}
+
+ela_map = {
+    f'{prefix}|ELA.{grade}.{code}': code
+    for grade in grades
+    for prefix, codes in standard_patterns.items()
+    for code in codes
+}
+
+data_map = {**disability_map, **ela_map, 'N/A': ''}
         df = df.replace(data_map)
 
         # 3. Convert Wide to Long Format
