@@ -6,18 +6,11 @@ st.set_page_config(page_title="FAST Data Processor", page_icon="📊", layout="w
 st.title("📊 FAST Data Cleaner & Report Generator")
 st.write("Upload your raw FAST file (CSV or Excel) to automatically clean, unpivot, and build benchmark pivot tables.")
 
-# Allow both CSV and Excel file types
 uploaded_file = st.file_uploader("Choose a raw FAST file", type=["csv", "xlsx", "xls"])
 
 
 def clean_benchmark_code(val):
-    """Dynamically cleans both Math and ELA standard codes.
-
-    Examples:
-    - PRR|MA.7.AR.4|MA.7.AR.4.2 -> MA.AR.4.2
-    - NSOAR|MA.7.AR.2|MA.7.AR.2.2 -> MA.AR.2.2
-    - RP|ELA.7.R.1.1|ELA.7.R.1.1 -> R.1.1
-    """
+    """Dynamically cleans both Math and ELA standard codes."""
     if pd.isna(val):
         return ""
     s = str(val).strip()
@@ -44,7 +37,7 @@ def clean_benchmark_code(val):
 
 if uploaded_file is not None:
     try:
-        # Check file extension and load appropriately
+        # Load CSV or Excel
         file_name = uploaded_file.name.lower()
         if file_name.endswith('.csv'):
             df = pd.read_csv(uploaded_file)
@@ -104,22 +97,54 @@ if uploaded_file is not None:
         df_long['Benchmark'] = df_long['Benchmark'].apply(clean_benchmark_code)
         df_long = df_long[df_long['Benchmark'] != ''].copy()
 
-        # 5. Generate Combined MultiIndex Pivot Summary
+        # 5. Generate Pivot Summaries with Metadata Rows
         pivot_earned = df_long.pivot_table(index='Benchmark', columns='Student Name', values='Points Earned', aggfunc='sum', fill_value=0)
         pivot_possible = df_long.pivot_table(index='Benchmark', columns='Student Name', values='Points Possible', aggfunc='sum', fill_value=0)
         pivot_pct = (pivot_earned / pivot_possible * 100).replace([float('inf'), -float('inf')], 0).fillna(0).round(1)
 
-        # Group Earned, Possible, and % metrics under each Student Name
+        # Extract student metadata values
+        student_meta = df_long.groupby('Student Name').first()
+
         combined_dfs = []
         students = sorted(df_long['Student Name'].unique())
 
         for student in students:
-            st_df = pd.DataFrame({
-                (student, 'Points Earned'): pivot_earned[student],
-                (student, 'Points Possible'): pivot_possible[student],
-                (student, '% Score'): pivot_pct[student].astype(str) + '%'
+            s_504 = student_meta.loc[student, '504']
+            s_ese = student_meta.loc[student, 'Primary Exceptionality']
+            s_esol = student_meta.loc[student, 'English Learner']
+            s_scale = student_meta.loc[student, 'Scale Score'] if pd.notna(student_meta.loc[student, 'Scale Score']) else ""
+            s_level = student_meta.loc[student, 'Level Score'] if pd.notna(student_meta.loc[student, 'Level Score']) else ""
+            
+            p_rank = student_meta.loc[student, 'Percentile Rank']
+            s_perc = f"{int(p_rank)}%" if pd.notna(p_rank) and str(p_rank).replace('.','',1).isdigit() else (str(p_rank) if pd.notna(p_rank) else "")
+
+            # Metadata top rows
+            meta_rows = pd.DataFrame({
+                (student, 'Points Earned'): [s_504, s_ese, s_esol, s_perc, s_scale, s_level],
+                (student, 'Points Possible'): ["", "", "", "", "", ""],
+                (student, '% Score'): ["", "", "", "", "", ""]
+            }, index=[
+                '504 Status',
+                'ESE (Primary Exceptionality)',
+                'ESOL (English Learner)',
+                'Percentile Rank',
+                'Scale Score',
+                'Performance Level'
+            ])
+
+            # Benchmark performance rows
+            bench_earned = pivot_earned[student]
+            bench_possible = pivot_possible[student]
+            bench_pct = pivot_pct[student].astype(str) + '%'
+
+            bench_rows = pd.DataFrame({
+                (student, 'Points Earned'): bench_earned,
+                (student, 'Points Possible'): bench_possible,
+                (student, '% Score'): bench_pct
             })
-            combined_dfs.append(st_df)
+
+            full_st_df = pd.concat([meta_rows, bench_rows])
+            combined_dfs.append(full_st_df)
 
         combined_pivot = pd.concat(combined_dfs, axis=1)
         combined_pivot.columns = pd.MultiIndex.from_tuples(combined_pivot.columns)
@@ -127,14 +152,14 @@ if uploaded_file is not None:
         st.success("✅ File processed successfully!")
 
         # Display preview tabs
-        tab1, tab2 = st.tabs(["📋 Long Data Format", "📊 Benchmark Summary"])
+        tab1, tab2 = st.tabs(["📋 Long Data Format", "📊 Benchmark & Demographic Summary"])
         with tab1:
             st.dataframe(df_long.head(20))
         with tab2:
-            st.write("### Combined Benchmark Performance Summary")
+            st.write("### Combined Benchmark & Student Demographic Summary")
             st.dataframe(combined_pivot)
 
-        # Build Excel File with 2 worksheets (Data + Consolidated Pivot)
+        # Build Excel File with 2 worksheets
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             df_long.to_excel(writer, sheet_name='Data', index=False)
