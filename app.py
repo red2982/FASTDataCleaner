@@ -4,13 +4,14 @@ import streamlit as st
 
 st.set_page_config(page_title="FAST Data Processor", page_icon="📊", layout="wide")
 st.title("📊 FAST Data Cleaner & Report Generator")
-st.write("Upload your raw FAST CSV file to automatically clean, unpivot, and build benchmark pivot tables.")
+st.write("Upload your raw FAST file (CSV or Excel) to automatically clean, unpivot, and build benchmark pivot tables.")
 
-uploaded_file = st.file_uploader("Choose a raw FAST CSV file", type=["csv"])
+# Allow both CSV and Excel file types
+uploaded_file = st.file_uploader("Choose a raw FAST file", type=["csv", "xlsx", "xls"])
 
 
 def clean_benchmark_code(val):
-    """Dynamically parses and cleans standard codes for both Math and ELA.
+    """Dynamically cleans both Math and ELA standard codes.
 
     Examples:
     - PRR|MA.7.AR.4|MA.7.AR.4.2 -> MA.AR.4.2
@@ -23,11 +24,9 @@ def clean_benchmark_code(val):
     if not s or s.lower() in ['nan', 'none', 'n/a']:
         return ""
 
-    # Step 1: Extract final segment after the last pipe '|'
     if '|' in s:
         s = s.split('|')[-1].strip()
 
-    # Step 2: Remove grade identifier (e.g. 7, 8, 912, K, PK)
     parts = s.split('.')
     subject_prefixes = ['MA', 'ELA', 'MATH', 'SC', 'SS', 'FL']
 
@@ -36,26 +35,34 @@ def clean_benchmark_code(val):
             subject = parts[0].upper()
             rest = '.'.join(parts[2:])
             if subject == 'ELA':
-                return rest  # Standard ELA format (e.g., R.1.1)
+                return rest
             else:
-                return f"{parts[0]}.{rest}"  # Standard Math format (e.g., MA.AR.4.2)
+                return f"{parts[0]}.{rest}"
 
     return s
 
 
 if uploaded_file is not None:
     try:
-        df = pd.read_csv(uploaded_file)
+        # Check file extension and load appropriately
+        file_name = uploaded_file.name.lower()
+        if file_name.endswith('.csv'):
+            df = pd.read_csv(uploaded_file)
+        else:
+            df = pd.read_excel(uploaded_file)
 
         # 1. Delete Unwanted Columns
-        cols_to_delete = [
+        static_cols_to_delete = [
             'Student ID', 'Student DOB', 'Ethnicity', 'Enrolled Grade', 'Sex', 'Enrolled School',
             'Enrolled District', 'Local ID', 'Testing Location', 'District Use', 'Test Reason',
-            'Test OppNumber', 'Date Taken', 'Test Completion Date', '1. Reading Prose and Poetry Performance',
-            '2. Reading Informational Text Performance', '3. Reading Across Genres & Vocabulary Performance', 'Category'
-        ] + [f'{i}. Category' for i in range(1, 73)]
+            'Test OppNumber', 'Date Taken', 'Test Completion Date'
+        ]
 
-        df = df.drop(columns=[c for c in cols_to_delete if c in df.columns])
+        cols_to_drop = [
+            c for c in df.columns 
+            if c in static_cols_to_delete or 'Performance' in str(c) or 'Category' in str(c)
+        ]
+        df = df.drop(columns=cols_to_drop)
 
         # 2. Map Disability Codes
         disability_codes = [
@@ -93,15 +100,15 @@ if uploaded_file is not None:
         df_long['Points Earned'] = pd.to_numeric(df_long['Points Earned'], errors='coerce')
         df_long['Points Possible'] = pd.to_numeric(df_long['Points Possible'], errors='coerce')
 
-        # 4. Clean Benchmark Standard Codes Dynamically
+        # 4. Clean Benchmark Standard Codes
         df_long['Benchmark'] = df_long['Benchmark'].apply(clean_benchmark_code)
         df_long = df_long[df_long['Benchmark'] != ''].copy()
 
-        # 5. Generate Pivot Summaries (Earned, Possible, and Percentage)
+        # 5. Generate Pivot Summaries
         pivot_earned = df_long.pivot_table(index='Benchmark', columns='Student Name', values='Points Earned', aggfunc='sum', fill_value=0)
         pivot_possible = df_long.pivot_table(index='Benchmark', columns='Student Name', values='Points Possible', aggfunc='sum', fill_value=0)
         
-        # Calculate Percentage Score safely
+        # Calculate Percentage Score
         pivot_pct = (pivot_earned / pivot_possible * 100).replace([float('inf'), -float('inf')], 0).fillna(0).round(1)
 
         st.success("✅ File processed successfully!")
@@ -120,7 +127,7 @@ if uploaded_file is not None:
             st.write("### Score Percentage (%) by Benchmark")
             st.dataframe(pivot_pct.astype(str) + '%')
 
-        # Build Excel File with all 4 worksheets
+        # Build Excel File in memory
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             df_long.to_excel(writer, sheet_name='Data', index=False)
