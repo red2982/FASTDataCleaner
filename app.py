@@ -76,19 +76,32 @@ if uploaded_file is not None:
         df_long['Points Earned'] = pd.to_numeric(df_long['Points Earned'], errors='coerce')
         df_long['Points Possible'] = pd.to_numeric(df_long['Points Possible'], errors='coerce')
 
-        # 4. Generate Pivot Summary
+        # Clean Benchmark standard codes (e.g. PRR|MA.7.AR.4|MA.7.AR.4.2 -> MA.AR.4.2)
+        df_long['Benchmark'] = df_long['Benchmark'].astype(str).str.replace(
+            r'.*\|(MA|ELA)\.(?:\d+|K|PK)\.(.*)', r'\1.\2', regex=True
+        )
+
+        # 4. Generate Pivot Summaries
         pivot_earned = df_long.pivot_table(index='Benchmark', columns='Student Name', values='Points Earned', aggfunc='sum', fill_value=0)
         pivot_possible = df_long.pivot_table(index='Benchmark', columns='Student Name', values='Points Possible', aggfunc='sum', fill_value=0)
+        
+        # Calculate score percentages safely
+        pivot_pct = (pivot_earned / pivot_possible * 100).replace([float('inf'), -float('inf')], 0).fillna(0).round(1)
 
         st.success("✅ File processed successfully!")
 
         # Display preview tabs
-        tab1, tab2 = st.tabs(["📋 Long Data Format", "📊 Benchmark Pivot Summary"])
+        tab1, tab2, tab3 = st.tabs(["📋 Long Data Format", "📊 Points Summary", "📈 Percentage Summary (%)"])
         with tab1:
             st.dataframe(df_long.head(20))
         with tab2:
             st.write("### Earned Points by Benchmark")
             st.dataframe(pivot_earned)
+            st.write("### Possible Points by Benchmark")
+            st.dataframe(pivot_possible)
+        with tab3:
+            st.write("### Score Percentage (%) by Benchmark")
+            st.dataframe(pivot_pct.astype(str) + '%')
 
         # Build Excel File in memory
         output = io.BytesIO()
@@ -96,6 +109,7 @@ if uploaded_file is not None:
             df_long.to_excel(writer, sheet_name='Data', index=False)
             pivot_earned.to_excel(writer, sheet_name='Earned Points')
             pivot_possible.to_excel(writer, sheet_name='Possible Points')
+            pivot_pct.to_excel(writer, sheet_name='Percentage')
 
         st.download_button(
             label="📥 Download Cleaned Excel File",
