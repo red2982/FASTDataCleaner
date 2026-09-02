@@ -8,6 +8,41 @@ st.write("Upload your raw FAST CSV file to automatically clean, unpivot, and bui
 
 uploaded_file = st.file_uploader("Choose a raw FAST CSV file", type=["csv"])
 
+
+def clean_benchmark_code(val):
+    """Dynamically parses and cleans standard codes for both Math and ELA.
+
+    Examples:
+    - PRR|MA.7.AR.4|MA.7.AR.4.2 -> MA.AR.4.2
+    - NSOAR|MA.7.AR.2|MA.7.AR.2.2 -> MA.AR.2.2
+    - RP|ELA.7.R.1.1|ELA.7.R.1.1 -> R.1.1
+    """
+    if pd.isna(val):
+        return ""
+    s = str(val).strip()
+    if not s or s.lower() in ['nan', 'none', 'n/a']:
+        return ""
+
+    # Step 1: Extract final segment after the last pipe '|'
+    if '|' in s:
+        s = s.split('|')[-1].strip()
+
+    # Step 2: Remove grade identifier (e.g. 7, 8, 912, K, PK)
+    parts = s.split('.')
+    subject_prefixes = ['MA', 'ELA', 'MATH', 'SC', 'SS', 'FL']
+
+    if len(parts) >= 3 and parts[0].upper() in subject_prefixes:
+        if parts[1].isdigit() or parts[1].upper() in ['K', 'PK', 'HS', 'KG', '912']:
+            subject = parts[0].upper()
+            rest = '.'.join(parts[2:])
+            if subject == 'ELA':
+                return rest  # Standard ELA format (e.g., R.1.1)
+            else:
+                return f"{parts[0]}.{rest}"  # Standard Math format (e.g., MA.AR.4.2)
+
+    return s
+
+
 if uploaded_file is not None:
     try:
         df = pd.read_csv(uploaded_file)
@@ -22,15 +57,7 @@ if uploaded_file is not None:
 
         df = df.drop(columns=[c for c in cols_to_delete if c in df.columns])
 
-        # 2. Bulk Find and Replace Exact
-        grades = ['K'] + [str(g) for g in range(1, 13)]
-
-        standard_patterns = {
-            'RP': [f'R.1.{i}' for i in range(1, 5)],
-            'RI': [f'R.2.{i}' for i in range(1, 5)],
-            'RGV': [f'R.3.{i}' for i in range(1, 5)] + ['V.1.3', 'V.1.2'],
-        }
-
+        # 2. Map Disability Codes
         disability_codes = [
             'K - Specific Learning Disability', 'J - Emotional/Behavioral Disability',
             'P - Autism Spectrum Disorder', 'L - Gifted', 'V - Other Health Impaired',
@@ -39,18 +66,8 @@ if uploaded_file is not None:
             'C - Orthopedic Impairment', 'O - Dual Sensory Impaired', 'U - Established Conditions',
             'Z - Other'
         ]
-
         disability_map = {'N - N/A': 'No', **{code: 'Yes' for code in disability_codes}}
-
-        ela_map = {
-            f'{prefix}|ELA.{grade}.{code}': code
-            for grade in grades
-            for prefix, codes in standard_patterns.items()
-            for code in codes
-        }
-
-        data_map = {**disability_map, **ela_map, 'N/A': ''}
-        df = df.replace(data_map)
+        df = df.replace(disability_map)
 
         # 3. Convert Wide to Long Format
         long_data = []
@@ -63,7 +80,7 @@ if uploaded_file is not None:
                 pe = bench_values[j + 1] if j + 1 < len(bench_values) else None
                 pp = bench_values[j + 2] if j + 2 < len(bench_values) else None
 
-                if pd.notna(bm) and pd.notna(pe) and pd.notna(pp) and str(bm).strip() != "":
+                if pd.notna(bm) and pd.notna(pe) and pd.notna(pp) and str(bm).strip().upper() not in ["", "N/A", "NAN"]:
                     long_data.append(meta + [bm, pe, pp])
 
         headers = [
@@ -76,34 +93,34 @@ if uploaded_file is not None:
         df_long['Points Earned'] = pd.to_numeric(df_long['Points Earned'], errors='coerce')
         df_long['Points Possible'] = pd.to_numeric(df_long['Points Possible'], errors='coerce')
 
-        # Clean Benchmark standard codes (e.g. PRR|MA.7.AR.4|MA.7.AR.4.2 -> MA.AR.4.2)
-        df_long['Benchmark'] = df_long['Benchmark'].astype(str).str.replace(
-            r'.*\|(MA|ELA)\.(?:\d+|K|PK)\.(.*)', r'\1.\2', regex=True
-        )
+        # 4. Clean Benchmark Standard Codes Dynamically
+        df_long['Benchmark'] = df_long['Benchmark'].apply(clean_benchmark_code)
+        df_long = df_long[df_long['Benchmark'] != ''].copy()
 
-        # 4. Generate Pivot Summaries
+        # 5. Generate Pivot Summaries (Earned, Possible, and Percentage)
         pivot_earned = df_long.pivot_table(index='Benchmark', columns='Student Name', values='Points Earned', aggfunc='sum', fill_value=0)
         pivot_possible = df_long.pivot_table(index='Benchmark', columns='Student Name', values='Points Possible', aggfunc='sum', fill_value=0)
         
-        # Calculate score percentages safely
+        # Calculate Percentage Score safely
         pivot_pct = (pivot_earned / pivot_possible * 100).replace([float('inf'), -float('inf')], 0).fillna(0).round(1)
 
         st.success("✅ File processed successfully!")
 
         # Display preview tabs
-        tab1, tab2, tab3 = st.tabs(["📋 Long Data Format", "📊 Points Summary", "📈 Percentage Summary (%)"])
+        tab1, tab2, tab3, tab4 = st.tabs(["📋 Long Data Format", "📊 Earned Points", "🎯 Possible Points", "📈 Percentage Summary (%)"])
         with tab1:
             st.dataframe(df_long.head(20))
         with tab2:
             st.write("### Earned Points by Benchmark")
             st.dataframe(pivot_earned)
+        with tab3:
             st.write("### Possible Points by Benchmark")
             st.dataframe(pivot_possible)
-        with tab3:
+        with tab4:
             st.write("### Score Percentage (%) by Benchmark")
             st.dataframe(pivot_pct.astype(str) + '%')
 
-        # Build Excel File in memory
+        # Build Excel File with all 4 worksheets
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             df_long.to_excel(writer, sheet_name='Data', index=False)
