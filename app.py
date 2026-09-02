@@ -104,36 +104,41 @@ if uploaded_file is not None:
         df_long['Benchmark'] = df_long['Benchmark'].apply(clean_benchmark_code)
         df_long = df_long[df_long['Benchmark'] != ''].copy()
 
-        # 5. Generate Pivot Summaries
+        # 5. Generate Combined MultiIndex Pivot Summary
         pivot_earned = df_long.pivot_table(index='Benchmark', columns='Student Name', values='Points Earned', aggfunc='sum', fill_value=0)
         pivot_possible = df_long.pivot_table(index='Benchmark', columns='Student Name', values='Points Possible', aggfunc='sum', fill_value=0)
-        
-        # Calculate Percentage Score
         pivot_pct = (pivot_earned / pivot_possible * 100).replace([float('inf'), -float('inf')], 0).fillna(0).round(1)
+
+        # Group Earned, Possible, and % metrics under each Student Name
+        combined_dfs = []
+        students = sorted(df_long['Student Name'].unique())
+
+        for student in students:
+            st_df = pd.DataFrame({
+                (student, 'Points Earned'): pivot_earned[student],
+                (student, 'Points Possible'): pivot_possible[student],
+                (student, '% Score'): pivot_pct[student].astype(str) + '%'
+            })
+            combined_dfs.append(st_df)
+
+        combined_pivot = pd.concat(combined_dfs, axis=1)
+        combined_pivot.columns = pd.MultiIndex.from_tuples(combined_pivot.columns)
 
         st.success("✅ File processed successfully!")
 
         # Display preview tabs
-        tab1, tab2, tab3, tab4 = st.tabs(["📋 Long Data Format", "📊 Earned Points", "🎯 Possible Points", "📈 Percentage Summary (%)"])
+        tab1, tab2 = st.tabs(["📋 Long Data Format", "📊 Benchmark Summary"])
         with tab1:
             st.dataframe(df_long.head(20))
         with tab2:
-            st.write("### Earned Points by Benchmark")
-            st.dataframe(pivot_earned)
-        with tab3:
-            st.write("### Possible Points by Benchmark")
-            st.dataframe(pivot_possible)
-        with tab4:
-            st.write("### Score Percentage (%) by Benchmark")
-            st.dataframe(pivot_pct.astype(str) + '%')
+            st.write("### Combined Benchmark Performance Summary")
+            st.dataframe(combined_pivot)
 
-        # Build Excel File in memory
+        # Build Excel File with 2 worksheets (Data + Consolidated Pivot)
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             df_long.to_excel(writer, sheet_name='Data', index=False)
-            pivot_earned.to_excel(writer, sheet_name='Earned Points')
-            pivot_possible.to_excel(writer, sheet_name='Possible Points')
-            pivot_pct.to_excel(writer, sheet_name='Percentage')
+            combined_pivot.to_excel(writer, sheet_name='Benchmark Summary')
 
         st.download_button(
             label="📥 Download Cleaned Excel File",
