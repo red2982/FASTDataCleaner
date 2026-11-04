@@ -36,52 +36,7 @@ def clean_benchmark_code(val):
     return s
 
 
-def resolve_metadata_columns(df_columns):
-    """Matches raw file headers to expected metadata aliases."""
-    aliases = {
-        "Student Name": ['student name', 'full name', 'student_name', 'name'],
-        "504": ['504 status', 'section 504', '504 plan', '504'],
-        "Primary Exceptionality": ['primary exceptionality', 'exceptionality', 'ese status', 'ese', 'primary_exceptionality'],
-        "English Learner": ['english learner', 'english language learner', 'ell status', 'esol status', 'ell', 'esol', 'lep'],
-        "Scale Score": ['scale score', 'overall scale score', 'scalescore', 'scale_score', 'ss'],
-        "Level Score": ['performance level', 'achievement level', 'level score', 'level_score', 'level'],
-        "Percentile Rank": ['percentile rank', 'percentile_rank', 'percentile', 'state percentile', 'pr']
-    }
-
-    resolved = {}
-    used_cols = set()
-
-    # Exact string match (case-insensitive)
-    for target, alias_list in aliases.items():
-        for col in df_columns:
-            if col in used_cols:
-                continue
-            col_clean = str(col).strip().lower()
-            if col_clean in [a.lower() for a in alias_list]:
-                resolved[target] = col
-                used_cols.add(col)
-                break
-
-    # Substring match fallback
-    for target, alias_list in aliases.items():
-        if target in resolved:
-            continue
-        for col in df_columns:
-            if col in used_cols:
-                continue
-            col_clean = str(col).strip().lower()
-            for alias in alias_list:
-                if alias.lower() in col_clean:
-                    resolved[target] = col
-                    used_cols.add(col)
-                    break
-            if target in resolved:
-                break
-
-    return resolved, used_cols
-
-
-@st.cache_data(show_spinner="Processing and reshaping file...")
+@st.cache_data(show_spinner="Processing and reshaping FAST file...")
 def process_fast_file(file_bytes, file_name):
     # 1. Load File
     if file_name.endswith('.csv'):
@@ -89,7 +44,6 @@ def process_fast_file(file_bytes, file_name):
     else:
         df_raw = pd.read_excel(io.BytesIO(file_bytes))
 
-    # Strip white spaces from column headers
     df_raw.columns = [str(c).strip() for c in df_raw.columns]
 
     # 2. Map Disability Codes
@@ -104,25 +58,41 @@ def process_fast_file(file_bytes, file_name):
     disability_map = {'N - N/A': 'No', **{code: 'Yes' for code in disability_codes}}
     df_raw = df_raw.replace(disability_map)
 
-    # 3. Resolve Metadata Columns Safely
-    resolved_meta, used_meta_cols = resolve_metadata_columns(df_raw.columns)
-    
+    # 3. Dynamic Column Mapping
+    cols = list(df_raw.columns)
+
+    scale_col = next((c for c in cols if 'scale score' in c.lower()), None)
+    level_col = next((c for c in cols if 'achievement level' in c.lower() or 'level score' in c.lower() or c.lower().endswith(' level')), None)
+    rank_col = next((c for c in cols if 'percentile rank' in c.lower() or 'percentile' in c.lower()), None)
+
+    meta_mapping = {
+        "Student Name": next((c for c in cols if 'student name' in c.lower()), None),
+        "504": next((c for c in cols if '504' in c.lower()), None),
+        "Primary Exceptionality": next((c for c in cols if 'exceptionality' in c.lower()), None),
+        "English Learner": next((c for c in cols if 'ell' in c.lower() or 'english' in c.lower()), None),
+        "Scale Score": scale_col,
+        "Level Score": level_col,
+        "Percentile Rank": rank_col
+    }
+
+    used_meta_cols = {v for k, v in meta_mapping.items() if v is not None}
+
     meta_order = [
         "Student Name", "504", "Primary Exceptionality", "English Learner",
         "Scale Score", "Level Score", "Percentile Rank"
     ]
 
-    # Build standardized metadata DataFrame
     meta_df = pd.DataFrame(index=df_raw.index)
     for target in meta_order:
-        if target in resolved_meta:
-            meta_df[target] = df_raw[resolved_meta[target]]
+        orig_col = meta_mapping[target]
+        if orig_col and orig_col in df_raw.columns:
+            meta_df[target] = df_raw[orig_col]
         else:
-            meta_df[target] = ""  # Default blank if column not in raw file
+            meta_df[target] = ""
 
-    # 4. Identify Benchmark Columns
+    # 4. Filter Benchmark Columns
     static_cols_to_delete = [
-        'student id', 'student dob', 'ethnicity', 'enrolled grade', 'sex', 'enrolled school',
+        'student id', 'fleid', 'student dob', 'ethnicity', 'enrolled grade', 'sex', 'enrolled school',
         'enrolled district', 'local id', 'testing location', 'district use', 'test reason',
         'test oppnumber', 'date taken', 'test completion date'
     ]
@@ -141,7 +111,7 @@ def process_fast_file(file_bytes, file_name):
     num_triplets = len(bench_cols) // 3
     valid_bench_cols = bench_cols[:num_triplets * 3]
 
-    # 5. Fast Vectorized Unpivoting via NumPy
+    # 5. Fast Vectorized Unpivoting
     meta_vals = meta_df.values
     bench_vals = df_raw[valid_bench_cols].values
 
@@ -155,15 +125,13 @@ def process_fast_file(file_bytes, file_name):
     headers = meta_order + ["Benchmark", "Points Earned", "Points Possible"]
     df_long = pd.DataFrame(flat_matrix, columns=headers)
 
-    # Convert numeric types safely
     df_long['Points Earned'] = pd.to_numeric(df_long['Points Earned'], errors='coerce')
     df_long['Points Possible'] = pd.to_numeric(df_long['Points Possible'], errors='coerce')
 
-    # Drop blank benchmarks
     df_long['Benchmark'] = df_long['Benchmark'].apply(clean_benchmark_code)
     df_long = df_long[(df_long['Benchmark'] != '') & df_long['Points Earned'].notna() & df_long['Points Possible'].notna()].copy()
 
-    # 6. Fast Pivot Table Creation
+    # 6. Pivot Table Generation
     pivot_earned = df_long.pivot_table(index='Benchmark', columns='Student Name', values='Points Earned', aggfunc='sum', fill_value=0)
     pivot_possible = df_long.pivot_table(index='Benchmark', columns='Student Name', values='Points Possible', aggfunc='sum', fill_value=0)
     pivot_pct = (pivot_earned / pivot_possible * 100).replace([float('inf'), -float('inf')], 0).fillna(0).round(1)
