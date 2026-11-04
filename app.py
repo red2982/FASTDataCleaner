@@ -52,13 +52,13 @@ def get_domain(bm):
     s_up = s.upper()
     parts = s_up.split('.')
 
-    # 1. Math Standards (e.g., MA.NSO, MA.AR, MA.GR, MA.DP)
+    # Math Standards (e.g., MA.NSO, MA.AR, MA.GR, MA.DP)
     if s_up.startswith('MA.'):
         if len(parts) >= 2:
             return f"MA.{parts[1]}"
         return "MATH"
 
-    # 2. ELA Standards mapped to FAST Reporting Categories
+    # ELA Standards mapped to FAST Reporting Categories
     if 'R.1' in s_up:
         return "RPP - Reading Prose & Poetry"
     elif 'R.2' in s_up:
@@ -77,6 +77,38 @@ def get_domain(bm):
     return "OTHER"
 
 
+def style_streamlit_table(df):
+    """Applies conditional formatting to Domain Total & Overall Total rows for Streamlit UI."""
+    def highlight_row(row):
+        styles = [''] * len(row)
+        idx_name = str(row.name).strip()
+        is_total = idx_name.startswith('TOTAL:') or 'OVERALL TEST TOTAL' in idx_name
+
+        if not is_total:
+            return styles
+
+        for i, (col_student, col_metric) in enumerate(df.columns):
+            if col_metric == '% Score':
+                val_str = str(row.iloc[i]).strip()
+                if val_str.endswith('%'):
+                    try:
+                        pct = float(val_str.replace('%', ''))
+                        if pct < 60.0:
+                            styles[i] = 'background-color: #FFC7CE; color: #9C0006; font-weight: bold;'
+                        elif pct < 70.0:
+                            styles[i] = 'background-color: #FFEB9C; color: #9C6500; font-weight: bold;'
+                        else:
+                            styles[i] = 'background-color: #C6EFCE; color: #006100; font-weight: bold;'
+                    except ValueError:
+                        pass
+            else:
+                styles[i] = 'font-weight: bold;'
+
+        return styles
+
+    return df.style.apply(highlight_row, axis=1)
+
+
 @st.cache_data(show_spinner="Processing and reshaping FAST file...")
 def process_fast_file(file_bytes, file_name):
     # 1. Load File
@@ -87,7 +119,7 @@ def process_fast_file(file_bytes, file_name):
 
     df_raw.columns = [str(c).strip() for c in df_raw.columns]
 
-    # 2. Map Exceptionality / Disability Codes flexibly
+    # 2. Map Exceptionality / Disability Codes
     ese_col = next((c for c in df_raw.columns if 'exceptionality' in c.lower()), None)
     if ese_col:
         df_raw[ese_col] = df_raw[ese_col].apply(clean_ese_status)
@@ -165,7 +197,7 @@ def process_fast_file(file_bytes, file_name):
     df_long['Benchmark'] = df_long['Benchmark'].apply(clean_benchmark_code)
     df_long = df_long[(df_long['Benchmark'] != '') & df_long['Points Earned'].notna() & df_long['Points Possible'].notna()].copy()
 
-    # Assign category / domain
+    # Assign domain prefix
     df_long['Domain'] = df_long['Benchmark'].apply(get_domain)
 
     # 6. Pivot Calculations for Benchmarks, Domains, and Overall Totals
@@ -283,18 +315,61 @@ if uploaded_file is not None:
 
         st.success("✅ File processed successfully!")
 
-        # Preview tabs
+        # Preview tabs with color-coded UI
         tab1, tab2 = st.tabs(["📊 Benchmark & Demographic Summary", "📋 Long Data Format (Preview Only)"])
         with tab1:
             st.write("### Combined Benchmark & Student Demographic Summary")
-            st.dataframe(combined_pivot)
+            st.dataframe(style_streamlit_table(combined_pivot))
         with tab2:
             st.dataframe(df_long.head(20))
 
-        # Build Excel File with Summary sheet
+        # Build Excel File with Safe Exception Handling for Styling
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             combined_pivot.to_excel(writer, sheet_name='Benchmark Summary')
+
+            try:
+                import openpyxl
+                from openpyxl.styles import PatternFill, Font
+
+                ws = writer.sheets['Benchmark Summary']
+
+                red_fill = PatternFill(start_color='FFC7CE', end_color='FFC7CE', fill_type='solid')
+                red_font = Font(color='9C0006', bold=True)
+                yellow_fill = PatternFill(start_color='FFEB9C', end_color='FFEB9C', fill_type='solid')
+                yellow_font = Font(color='9C6500', bold=True)
+                green_fill = PatternFill(start_color='C6EFCE', end_color='C6EFCE', fill_type='solid')
+                green_font = Font(color='006100', bold=True)
+                bold_font = Font(bold=True)
+
+                for row_idx in range(1, ws.max_row + 1):
+                    row_label = str(ws.cell(row=row_idx, column=1).value or '').strip()
+                    is_total_row = row_label.startswith('TOTAL:') or 'OVERALL TEST TOTAL' in row_label
+
+                    if is_total_row:
+                        for col_idx in range(1, ws.max_column + 1):
+                            ws.cell(row=row_idx, column=col_idx).font = bold_font
+
+                        for col_idx in range(2, ws.max_column + 1):
+                            cell = ws.cell(row=row_idx, column=col_idx)
+                            cell_val = str(cell.value or '').strip()
+                            if cell_val.endswith('%'):
+                                try:
+                                    pct = float(cell_val.replace('%', ''))
+                                    if pct < 60.0:
+                                        cell.fill = red_fill
+                                        cell.font = red_font
+                                    elif pct < 70.0:
+                                        cell.fill = yellow_fill
+                                        cell.font = yellow_font
+                                    else:
+                                        cell.fill = green_fill
+                                        cell.font = green_font
+                                except ValueError:
+                                    pass
+
+            except Exception as excel_err:
+                st.warning(f"Note: Excel styling notice ({excel_err}). Output file created with default formatting.")
 
         st.download_button(
             label="📥 Download Cleaned Excel File",
