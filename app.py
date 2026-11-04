@@ -250,8 +250,8 @@ def process_fast_file(file_bytes, file_name):
         row_labels.append(subtotal_label)
 
         # Domain Class / Group Total
-        c_d_e = domain_earned.loc[domain].sum() if domain in domain_earned.index else 0
-        c_d_p = domain_possible.loc[domain].sum() if domain in domain_possible.index else 0
+        c_d_e = int(round(domain_earned.loc[domain].sum())) if domain in domain_earned.index else 0
+        c_d_p = int(round(domain_possible.loc[domain].sum())) if domain in domain_possible.index else 0
         c_d_pct = f"{round((c_d_e / c_d_p * 100), 1)}%" if c_d_p > 0 else "0.0%"
         combined_data[('CLASS / GROUP TOTAL', 'Points Earned')].append(c_d_e)
         combined_data[('CLASS / GROUP TOTAL', 'Points Possible')].append(c_d_p)
@@ -259,8 +259,8 @@ def process_fast_file(file_bytes, file_name):
 
         # Domain Student Values
         for student in students:
-            d_e = domain_earned.loc[domain, student] if (domain in domain_earned.index and student in domain_earned.columns) else 0
-            d_p = domain_possible.loc[domain, student] if (domain in domain_possible.index and student in domain_possible.columns) else 0
+            d_e = int(round(domain_earned.loc[domain, student])) if (domain in domain_earned.index and student in domain_earned.columns) else 0
+            d_p = int(round(domain_possible.loc[domain, student])) if (domain in domain_possible.index and student in domain_possible.columns) else 0
             d_pct = f"{round((d_e / d_p * 100), 1)}%" if d_p > 0 else "0.0%"
             combined_data[(student, 'Points Earned')].append(d_e)
             combined_data[(student, 'Points Possible')].append(d_p)
@@ -271,16 +271,16 @@ def process_fast_file(file_bytes, file_name):
         for bm in bms:
             row_labels.append(f"  └─ {bm}")
 
-            c_b_e = pivot_earned.loc[bm].sum() if bm in pivot_earned.index else 0
-            c_b_p = pivot_possible.loc[bm].sum() if bm in pivot_possible.index else 0
+            c_b_e = int(round(pivot_earned.loc[bm].sum())) if bm in pivot_earned.index else 0
+            c_b_p = int(round(pivot_possible.loc[bm].sum())) if bm in pivot_possible.index else 0
             c_b_pct = f"{round((c_b_e / c_b_p * 100), 1)}%" if c_b_p > 0 else "0.0%"
             combined_data[('CLASS / GROUP TOTAL', 'Points Earned')].append(c_b_e)
             combined_data[('CLASS / GROUP TOTAL', 'Points Possible')].append(c_b_p)
             combined_data[('CLASS / GROUP TOTAL', '% Score')].append(c_b_pct)
 
             for student in students:
-                b_e = pivot_earned.loc[bm, student] if (bm in pivot_earned.index and student in pivot_earned.columns) else 0
-                b_p = pivot_possible.loc[bm, student] if (bm in pivot_possible.index and student in pivot_possible.columns) else 0
+                b_e = int(round(pivot_earned.loc[bm, student])) if (bm in pivot_earned.index and student in pivot_earned.columns) else 0
+                b_p = int(round(pivot_possible.loc[bm, student])) if (bm in pivot_possible.index and student in pivot_possible.columns) else 0
                 b_pct = f"{round((b_e / b_p * 100), 1)}%" if b_p > 0 else "0.0%"
                 combined_data[(student, 'Points Earned')].append(b_e)
                 combined_data[(student, 'Points Possible')].append(b_p)
@@ -288,16 +288,16 @@ def process_fast_file(file_bytes, file_name):
 
     # Overall Test Total Row
     row_labels.append("🏆 OVERALL TEST TOTAL")
-    c_o_e = overall_earned.sum()
-    c_o_p = overall_possible.sum()
+    c_o_e = int(round(overall_earned.sum()))
+    c_o_p = int(round(overall_possible.sum()))
     c_o_pct = f"{round((c_o_e / c_o_p * 100), 1)}%" if c_o_p > 0 else "0.0%"
     combined_data[('CLASS / GROUP TOTAL', 'Points Earned')].append(c_o_e)
     combined_data[('CLASS / GROUP TOTAL', 'Points Possible')].append(c_o_p)
     combined_data[('CLASS / GROUP TOTAL', '% Score')].append(c_o_pct)
 
     for student in students:
-        o_e = overall_earned.loc[student] if student in overall_earned.index else 0
-        o_p = overall_possible.loc[student] if student in overall_possible.index else 0
+        o_e = int(round(overall_earned.loc[student])) if student in overall_earned.index else 0
+        o_p = int(round(overall_possible.loc[student])) if student in overall_possible.index else 0
         o_pct = f"{round((o_e / o_p * 100), 1)}%" if o_p > 0 else "0.0%"
         combined_data[(student, 'Points Earned')].append(o_e)
         combined_data[(student, 'Points Possible')].append(o_p)
