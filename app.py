@@ -47,21 +47,33 @@ def clean_ese_status(val):
 
 
 def get_domain(bm):
-    """Extracts high-level domain prefix from benchmark standard."""
+    """Maps benchmarks into Math Strands or ELA FAST Reporting Categories."""
     s = str(bm).strip()
-    parts = s.split('.')
-    if s.startswith('MA.'):
+    s_up = s.upper()
+    parts = s_up.split('.')
+
+    # 1. Math Standards (e.g., MA.NSO, MA.AR, MA.GR, MA.DP)
+    if s_up.startswith('MA.'):
         if len(parts) >= 2:
             return f"MA.{parts[1]}"
+        return "MATH"
+
+    # 2. ELA Standards mapped to FAST Reporting Categories
+    if 'R.1' in s_up:
+        return "RPP - Reading Prose & Poetry"
+    elif 'R.2' in s_up:
+        return "RIT - Reading Informational Text"
+    elif 'R.3' in s_up:
+        return "RAG - Reading Across Genres"
+    elif 'V.' in s_up or s_up.startswith('V') or 'VOCAB' in s_up:
+        return "VOC - Vocabulary"
+    elif 'C.' in s_up or s_up.startswith('C'):
+        return "COM - Communication"
+    elif 'F.' in s_up or s_up.startswith('F'):
+        return "FND - Foundational Skills"
     elif len(parts) >= 1:
-        prefix = parts[0].upper()
-        ela_map = {
-            'R': 'R - Reading',
-            'C': 'C - Communication',
-            'V': 'V - Vocabulary',
-            'F': 'F - Foundational Skills'
-        }
-        return ela_map.get(prefix, prefix)
+        return parts[0]
+
     return "OTHER"
 
 
@@ -153,7 +165,7 @@ def process_fast_file(file_bytes, file_name):
     df_long['Benchmark'] = df_long['Benchmark'].apply(clean_benchmark_code)
     df_long = df_long[(df_long['Benchmark'] != '') & df_long['Points Earned'].notna() & df_long['Points Possible'].notna()].copy()
 
-    # Add Domain column for hybrid aggregation
+    # Assign category / domain
     df_long['Domain'] = df_long['Benchmark'].apply(get_domain)
 
     # 6. Pivot Calculations for Benchmarks, Domains, and Overall Totals
@@ -172,7 +184,7 @@ def process_fast_file(file_bytes, file_name):
 
     combined_data = {}
 
-    # Place CLASS / GROUP TOTAL column first
+    # CLASS / GROUP TOTAL column first
     combined_data[('CLASS / GROUP TOTAL', 'Points Earned')] = ["Total Students", len(students), "", "", "", ""]
     combined_data[('CLASS / GROUP TOTAL', 'Points Possible')] = ["", "", "", "", "", ""]
     combined_data[('CLASS / GROUP TOTAL', '% Score')] = ["", "", "", "", "", ""]
