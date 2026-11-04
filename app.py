@@ -2,6 +2,8 @@ import io
 import numpy as np
 import pandas as pd
 import streamlit as st
+import openpyxl
+from openpyxl.styles import PatternFill, Font
 
 st.set_page_config(page_title="FAST Data Processor", page_icon="📊", layout="wide")
 st.title("📊 FAST Data Cleaner & Report Generator")
@@ -52,13 +54,13 @@ def get_domain(bm):
     s_up = s.upper()
     parts = s_up.split('.')
 
-    # 1. Math Standards (e.g., MA.NSO, MA.AR, MA.GR, MA.DP)
+    # Math Standards (e.g., MA.NSO, MA.AR, MA.GR, MA.DP)
     if s_up.startswith('MA.'):
         if len(parts) >= 2:
             return f"MA.{parts[1]}"
         return "MATH"
 
-    # 2. ELA Standards mapped to FAST Reporting Categories
+    # ELA Standards mapped to FAST Reporting Categories
     if 'R.1' in s_up:
         return "RPP - Reading Prose & Poetry"
     elif 'R.2' in s_up:
@@ -291,10 +293,49 @@ if uploaded_file is not None:
         with tab2:
             st.dataframe(df_long.head(20))
 
-        # Build Excel File with Summary sheet
+        # Build Excel File with Summary sheet & Conditional Formatting
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             combined_pivot.to_excel(writer, sheet_name='Benchmark Summary')
+            ws = writer.sheets['Benchmark Summary']
+
+            # Define conditional styles
+            red_fill = PatternFill(start_color='FFC7CE', end_color='FFC7CE', fill_type='solid')
+            red_font = Font(color='9C0006', bold=True)
+            yellow_fill = PatternFill(start_color='FFEB9C', end_color='FFEB9C', fill_type='solid')
+            yellow_font = Font(color='9C6500', bold=True)
+            green_fill = PatternFill(start_color='C6EFCE', end_color='C6EFCE', fill_type='solid')
+            green_font = Font(color='006100', bold=True)
+            bold_font = Font(bold=True)
+
+            # Highlight ONLY grouping/total rows
+            for row_idx in range(1, ws.max_row + 1):
+                row_label = str(ws.cell(row=row_idx, column=1).value or '').strip()
+                is_total_row = row_label.startswith('TOTAL:') or 'OVERALL TEST TOTAL' in row_label
+
+                if is_total_row:
+                    # Bold total row text
+                    for col_idx in range(1, ws.max_column + 1):
+                        ws.cell(row=row_idx, column=col_idx).font = bold_font
+
+                    # Apply percentage color fills
+                    for col_idx in range(2, ws.max_column + 1):
+                        cell = ws.cell(row=row_idx, column=col_idx)
+                        cell_val = str(cell.value or '').strip()
+                        if cell_val.endswith('%'):
+                            try:
+                                pct = float(cell_val.replace('%', ''))
+                                if pct < 60.0:
+                                    cell.fill = red_fill
+                                    cell.font = red_font
+                                elif pct < 70.0:
+                                    cell.fill = yellow_fill
+                                    cell.font = yellow_font
+                                else:
+                                    cell.fill = green_fill
+                                    cell.font = green_font
+                            except ValueError:
+                                pass
 
         st.download_button(
             label="📥 Download Cleaned Excel File",
