@@ -30,7 +30,7 @@ def clean_benchmark_code(val):
             if subject == 'ELA':
                 return rest
             else:
-                return f"{parts[0]}.{rest}"
+                return f"{subject}.{rest}"
 
     return s
 
@@ -40,24 +40,11 @@ if uploaded_file is not None:
         # Load CSV or Excel
         file_name = uploaded_file.name.lower()
         if file_name.endswith('.csv'):
-            df = pd.read_csv(uploaded_file)
+            df_raw = pd.read_csv(uploaded_file)
         else:
-            df = pd.read_excel(uploaded_file)
+            df_raw = pd.read_excel(uploaded_file)
 
-        # 1. Delete Unwanted Columns
-        static_cols_to_delete = [
-            'Student ID', 'Student DOB', 'Ethnicity', 'Enrolled Grade', 'Sex', 'Enrolled School',
-            'Enrolled District', 'Local ID', 'Testing Location', 'District Use', 'Test Reason',
-            'Test OppNumber', 'Date Taken', 'Test Completion Date'
-        ]
-
-        cols_to_drop = [
-            c for c in df.columns 
-            if c in static_cols_to_delete or 'Performance' in str(c) or 'Category' in str(c)
-        ]
-        df = df.drop(columns=cols_to_drop)
-
-        # 2. Map Disability Codes
+        # 1. Map Disability Codes across raw DataFrame
         disability_codes = [
             'K - Specific Learning Disability', 'J - Emotional/Behavioral Disability',
             'P - Autism Spectrum Disorder', 'L - Gifted', 'V - Other Health Impaired',
@@ -67,27 +54,51 @@ if uploaded_file is not None:
             'Z - Other'
         ]
         disability_map = {'N - N/A': 'No', **{code: 'Yes' for code in disability_codes}}
-        df = df.replace(disability_map)
+        df_raw = df_raw.replace(disability_map)
 
-        # 3. Convert Wide to Long Format
+        # 2. Extract explicitly mapped metadata columns safely before dropping
+        meta_col_names = [
+            "Student Name", "504", "Primary Exceptionality", "English Learner",
+            "Scale Score", "Level Score", "Percentile Rank"
+        ]
+        
+        # Verify metadata column existence in input file
+        missing_cols = [c for c in meta_col_names if c not in df_raw.columns]
+        if missing_cols:
+            st.warning(f"Note: The following expected metadata columns were not found: {missing_cols}")
+
+        # Identify benchmark dynamic columns (exclude static/deleted cols and metadata)
+        static_cols_to_delete = [
+            'Student ID', 'Student DOB', 'Ethnicity', 'Enrolled Grade', 'Sex', 'Enrolled School',
+            'Enrolled District', 'Local ID', 'Testing Location', 'District Use', 'Test Reason',
+            'Test OppNumber', 'Date Taken', 'Test Completion Date'
+        ]
+
+        bench_cols = [
+            c for c in df_raw.columns 
+            if c not in meta_col_names 
+            and c not in static_cols_to_delete 
+            and 'Performance' not in str(c) 
+            and 'Category' not in str(c)
+        ]
+
+        # 3. Convert Wide to Long Format safely
         long_data = []
-        for _, row in df.iterrows():
-            meta = [row.iloc[0], row.iloc[1], row.iloc[2], row.iloc[3], row.iloc[4], row.iloc[5], row.iloc[6]]
-            bench_values = row.iloc[7:].values
+        for _, row in df_raw.iterrows():
+            # Grab metadata values by column name rather than position
+            meta_vals = [row.get(col, "") for col in meta_col_names]
+            bench_values = row[bench_cols].values
 
-            for j in range(0, len(bench_values) - 1, 3):
-                bm = bench_values[j]
+            # Step in triplets (Benchmark Code, Points Earned, Points Possible)
+            for j in range(0, len(bench_values), 3):
+                bm = bench_values[j] if j < len(bench_values) else None
                 pe = bench_values[j + 1] if j + 1 < len(bench_values) else None
                 pp = bench_values[j + 2] if j + 2 < len(bench_values) else None
 
                 if pd.notna(bm) and pd.notna(pe) and pd.notna(pp) and str(bm).strip().upper() not in ["", "N/A", "NAN"]:
-                    long_data.append(meta + [bm, pe, pp])
+                    long_data.append(meta_vals + [bm, pe, pp])
 
-        headers = [
-            "Student Name", "504", "Primary Exceptionality", "English Learner",
-            "Scale Score", "Level Score", "Percentile Rank",
-            "Benchmark", "Points Earned", "Points Possible"
-        ]
+        headers = meta_col_names + ["Benchmark", "Points Earned", "Points Possible"]
 
         df_long = pd.DataFrame(long_data, columns=headers)
         df_long['Points Earned'] = pd.to_numeric(df_long['Points Earned'], errors='coerce')
@@ -97,7 +108,7 @@ if uploaded_file is not None:
         df_long['Benchmark'] = df_long['Benchmark'].apply(clean_benchmark_code)
         df_long = df_long[df_long['Benchmark'] != ''].copy()
 
-        # 5. Generate Pivot Summaries with Metadata Rows
+        # 5. Generate Pivot Summaries
         pivot_earned = df_long.pivot_table(index='Benchmark', columns='Student Name', values='Points Earned', aggfunc='sum', fill_value=0)
         pivot_possible = df_long.pivot_table(index='Benchmark', columns='Student Name', values='Points Possible', aggfunc='sum', fill_value=0)
         pivot_pct = (pivot_earned / pivot_possible * 100).replace([float('inf'), -float('inf')], 0).fillna(0).round(1)
