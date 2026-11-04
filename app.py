@@ -36,6 +36,16 @@ def clean_benchmark_code(val):
     return s
 
 
+def clean_ese_status(val):
+    """Converts ESE Exceptionality codes to Yes/No safely."""
+    if pd.isna(val):
+        return "No"
+    s = str(val).strip()
+    if not s or s.upper().startswith("N -") or s.upper() in ["N/A", "NONE", "NO", "N", "NAN"]:
+        return "No"
+    return "Yes"
+
+
 @st.cache_data(show_spinner="Processing and reshaping FAST file...")
 def process_fast_file(file_bytes, file_name):
     # 1. Load File
@@ -46,17 +56,10 @@ def process_fast_file(file_bytes, file_name):
 
     df_raw.columns = [str(c).strip() for c in df_raw.columns]
 
-    # 2. Map Disability Codes
-    disability_codes = [
-        'K - Specific Learning Disability', 'J - Emotional/Behavioral Disability',
-        'P - Autism Spectrum Disorder', 'L - Gifted', 'V - Other Health Impaired',
-        'H - Deaf or Hard of Hearing', 'G - Language Impaired', 'I - Visually Impaired',
-        'F - Speech Impaired', 'W - Intellectual Disabilities', 'M - Hospital Homebound',
-        'C - Orthopedic Impairment', 'O - Dual Sensory Impaired', 'U - Established Conditions',
-        'Z - Other'
-    ]
-    disability_map = {'N - N/A': 'No', **{code: 'Yes' for code in disability_codes}}
-    df_raw = df_raw.replace(disability_map)
+    # 2. Map Exceptionality / Disability Codes flexibly
+    ese_col = next((c for c in df_raw.columns if 'exceptionality' in c.lower()), None)
+    if ese_col:
+        df_raw[ese_col] = df_raw[ese_col].apply(clean_ese_status)
 
     # 3. Dynamic Column Mapping
     cols = list(df_raw.columns)
@@ -68,7 +71,7 @@ def process_fast_file(file_bytes, file_name):
     meta_mapping = {
         "Student Name": next((c for c in cols if 'student name' in c.lower()), None),
         "504": next((c for c in cols if '504' in c.lower()), None),
-        "Primary Exceptionality": next((c for c in cols if 'exceptionality' in c.lower()), None),
+        "Primary Exceptionality": ese_col,
         "English Learner": next((c for c in cols if 'ell' in c.lower() or 'english' in c.lower()), None),
         "Scale Score": scale_col,
         "Level Score": level_col,
@@ -175,16 +178,17 @@ if uploaded_file is not None:
 
         st.success("✅ File processed successfully!")
 
-        tab1, tab2 = st.tabs(["📋 Long Data Format", "📊 Benchmark & Demographic Summary"])
+        # Display preview tabs in UI
+        tab1, tab2 = st.tabs(["📊 Benchmark & Demographic Summary", "📋 Long Data Format (Preview Only)"])
         with tab1:
-            st.dataframe(df_long.head(20))
-        with tab2:
             st.write("### Combined Benchmark & Student Demographic Summary")
             st.dataframe(combined_pivot)
+        with tab2:
+            st.dataframe(df_long.head(20))
 
+        # Build Excel File with ONLY 1 worksheet (Summary)
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df_long.to_excel(writer, sheet_name='Data', index=False)
             combined_pivot.to_excel(writer, sheet_name='Benchmark Summary')
 
         st.download_button(
