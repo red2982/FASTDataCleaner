@@ -1,4 +1,5 @@
 import io
+import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -35,134 +36,116 @@ def clean_benchmark_code(val):
     return s
 
 
+@st.cache_data(show_spinner="Processing and reshaping file...")
+def process_fast_file(file_bytes, file_name):
+    # 1. Load File
+    if file_name.endswith('.csv'):
+        df_raw = pd.read_csv(io.BytesIO(file_bytes))
+    else:
+        df_raw = pd.read_excel(io.BytesIO(file_bytes))
+
+    # 2. Disability Map
+    disability_codes = [
+        'K - Specific Learning Disability', 'J - Emotional/Behavioral Disability',
+        'P - Autism Spectrum Disorder', 'L - Gifted', 'V - Other Health Impaired',
+        'H - Deaf or Hard of Hearing', 'G - Language Impaired', 'I - Visually Impaired',
+        'F - Speech Impaired', 'W - Intellectual Disabilities', 'M - Hospital Homebound',
+        'C - Orthopedic Impairment', 'O - Dual Sensory Impaired', 'U - Established Conditions',
+        'Z - Other'
+    ]
+    disability_map = {'N - N/A': 'No', **{code: 'Yes' for code in disability_codes}}
+    df_raw = df_raw.replace(disability_map)
+
+    # 3. Separate Metadata vs Benchmark Columns
+    meta_col_names = [
+        "Student Name", "504", "Primary Exceptionality", "English Learner",
+        "Scale Score", "Level Score", "Percentile Rank"
+    ]
+
+    static_cols_to_delete = [
+        'Student ID', 'Student DOB', 'Ethnicity', 'Enrolled Grade', 'Sex', 'Enrolled School',
+        'Enrolled District', 'Local ID', 'Testing Location', 'District Use', 'Test Reason',
+        'Test OppNumber', 'Date Taken', 'Test Completion Date'
+    ]
+
+    bench_cols = [
+        c for c in df_raw.columns 
+        if c not in meta_col_names 
+        and c not in static_cols_to_delete 
+        and 'Performance' not in str(c) 
+        and 'Category' not in str(c)
+    ]
+
+    num_triplets = len(bench_cols) // 3
+    valid_bench_cols = bench_cols[:num_triplets * 3]
+
+    # 4. Fast Vectorized Unpivoting via NumPy
+    meta_vals = df_raw[meta_col_names].values
+    bench_vals = df_raw[valid_bench_cols].values
+
+    if num_triplets > 0:
+        meta_tiled = np.repeat(meta_vals[:, np.newaxis, :], num_triplets, axis=1)
+        bench_reshaped = bench_vals.reshape(len(df_raw), num_triplets, 3)
+        flat_matrix = np.concatenate([meta_tiled, bench_reshaped], axis=2).reshape(-1, 10)
+    else:
+        flat_matrix = np.empty((0, 10))
+
+    headers = meta_col_names + ["Benchmark", "Points Earned", "Points Possible"]
+    df_long = pd.DataFrame(flat_matrix, columns=headers)
+
+    # Convert numeric types safely
+    df_long['Points Earned'] = pd.to_numeric(df_long['Points Earned'], errors='coerce')
+    df_long['Points Possible'] = pd.to_numeric(df_long['Points Possible'], errors='coerce')
+
+    # Drop blank benchmarks
+    df_long['Benchmark'] = df_long['Benchmark'].apply(clean_benchmark_code)
+    df_long = df_long[(df_long['Benchmark'] != '') & df_long['Points Earned'].notna() & df_long['Points Possible'].notna()].copy()
+
+    # 5. Fast Pivot Table Creation
+    pivot_earned = df_long.pivot_table(index='Benchmark', columns='Student Name', values='Points Earned', aggfunc='sum', fill_value=0)
+    pivot_possible = df_long.pivot_table(index='Benchmark', columns='Student Name', values='Points Possible', aggfunc='sum', fill_value=0)
+    pivot_pct = (pivot_earned / pivot_possible * 100).replace([float('inf'), -float('inf')], 0).fillna(0).round(1)
+
+    student_meta = df_long.groupby('Student Name').first()
+    students = sorted(df_long['Student Name'].unique())
+
+    # Build MultiIndex dictionary directly (Instant performance)
+    combined_data = {}
+    for student in students:
+        s_504 = student_meta.loc[student, '504']
+        s_ese = student_meta.loc[student, 'Primary Exceptionality']
+        s_esol = student_meta.loc[student, 'English Learner']
+        s_scale = student_meta.loc[student, 'Scale Score'] if pd.notna(student_meta.loc[student, 'Scale Score']) else ""
+        s_level = student_meta.loc[student, 'Level Score'] if pd.notna(student_meta.loc[student, 'Level Score']) else ""
+        
+        p_rank = student_meta.loc[student, 'Percentile Rank']
+        s_perc = f"{int(p_rank)}%" if pd.notna(p_rank) and str(p_rank).replace('.','',1).isdigit() else (str(p_rank) if pd.notna(p_rank) else "")
+
+        combined_data[(student, 'Points Earned')] = [s_504, s_ese, s_esol, s_perc, s_scale, s_level] + pivot_earned[student].tolist()
+        combined_data[(student, 'Points Possible')] = ["", "", "", "", "", ""] + pivot_possible[student].tolist()
+        combined_data[(student, '% Score')] = ["", "", "", "", "", ""] + (pivot_pct[student].astype(str) + '%').tolist()
+
+    row_indices = [
+        '504 Status',
+        'ESE (Primary Exceptionality)',
+        'ESOL (English Learner)',
+        'Percentile Rank',
+        'Scale Score',
+        'Performance Level'
+    ] + pivot_earned.index.tolist()
+
+    combined_pivot = pd.DataFrame(combined_data, index=row_indices)
+    combined_pivot.columns = pd.MultiIndex.from_tuples(combined_pivot.columns)
+
+    return df_long, combined_pivot
+
+
 if uploaded_file is not None:
     try:
-        # Load CSV or Excel
-        file_name = uploaded_file.name.lower()
-        if file_name.endswith('.csv'):
-            df_raw = pd.read_csv(uploaded_file)
-        else:
-            df_raw = pd.read_excel(uploaded_file)
-
-        # 1. Map Disability Codes across raw DataFrame
-        disability_codes = [
-            'K - Specific Learning Disability', 'J - Emotional/Behavioral Disability',
-            'P - Autism Spectrum Disorder', 'L - Gifted', 'V - Other Health Impaired',
-            'H - Deaf or Hard of Hearing', 'G - Language Impaired', 'I - Visually Impaired',
-            'F - Speech Impaired', 'W - Intellectual Disabilities', 'M - Hospital Homebound',
-            'C - Orthopedic Impairment', 'O - Dual Sensory Impaired', 'U - Established Conditions',
-            'Z - Other'
-        ]
-        disability_map = {'N - N/A': 'No', **{code: 'Yes' for code in disability_codes}}
-        df_raw = df_raw.replace(disability_map)
-
-        # 2. Extract explicitly mapped metadata columns safely before dropping
-        meta_col_names = [
-            "Student Name", "504", "Primary Exceptionality", "English Learner",
-            "Scale Score", "Level Score", "Percentile Rank"
-        ]
-        
-        # Verify metadata column existence in input file
-        missing_cols = [c for c in meta_col_names if c not in df_raw.columns]
-        if missing_cols:
-            st.warning(f"Note: The following expected metadata columns were not found: {missing_cols}")
-
-        # Identify benchmark dynamic columns (exclude static/deleted cols and metadata)
-        static_cols_to_delete = [
-            'Student ID', 'Student DOB', 'Ethnicity', 'Enrolled Grade', 'Sex', 'Enrolled School',
-            'Enrolled District', 'Local ID', 'Testing Location', 'District Use', 'Test Reason',
-            'Test OppNumber', 'Date Taken', 'Test Completion Date'
-        ]
-
-        bench_cols = [
-            c for c in df_raw.columns 
-            if c not in meta_col_names 
-            and c not in static_cols_to_delete 
-            and 'Performance' not in str(c) 
-            and 'Category' not in str(c)
-        ]
-
-        # 3. Convert Wide to Long Format safely
-        long_data = []
-        for _, row in df_raw.iterrows():
-            # Grab metadata values by column name rather than position
-            meta_vals = [row.get(col, "") for col in meta_col_names]
-            bench_values = row[bench_cols].values
-
-            # Step in triplets (Benchmark Code, Points Earned, Points Possible)
-            for j in range(0, len(bench_values), 3):
-                bm = bench_values[j] if j < len(bench_values) else None
-                pe = bench_values[j + 1] if j + 1 < len(bench_values) else None
-                pp = bench_values[j + 2] if j + 2 < len(bench_values) else None
-
-                if pd.notna(bm) and pd.notna(pe) and pd.notna(pp) and str(bm).strip().upper() not in ["", "N/A", "NAN"]:
-                    long_data.append(meta_vals + [bm, pe, pp])
-
-        headers = meta_col_names + ["Benchmark", "Points Earned", "Points Possible"]
-
-        df_long = pd.DataFrame(long_data, columns=headers)
-        df_long['Points Earned'] = pd.to_numeric(df_long['Points Earned'], errors='coerce')
-        df_long['Points Possible'] = pd.to_numeric(df_long['Points Possible'], errors='coerce')
-
-        # 4. Clean Benchmark Standard Codes
-        df_long['Benchmark'] = df_long['Benchmark'].apply(clean_benchmark_code)
-        df_long = df_long[df_long['Benchmark'] != ''].copy()
-
-        # 5. Generate Pivot Summaries
-        pivot_earned = df_long.pivot_table(index='Benchmark', columns='Student Name', values='Points Earned', aggfunc='sum', fill_value=0)
-        pivot_possible = df_long.pivot_table(index='Benchmark', columns='Student Name', values='Points Possible', aggfunc='sum', fill_value=0)
-        pivot_pct = (pivot_earned / pivot_possible * 100).replace([float('inf'), -float('inf')], 0).fillna(0).round(1)
-
-        # Extract student metadata values
-        student_meta = df_long.groupby('Student Name').first()
-
-        combined_dfs = []
-        students = sorted(df_long['Student Name'].unique())
-
-        for student in students:
-            s_504 = student_meta.loc[student, '504']
-            s_ese = student_meta.loc[student, 'Primary Exceptionality']
-            s_esol = student_meta.loc[student, 'English Learner']
-            s_scale = student_meta.loc[student, 'Scale Score'] if pd.notna(student_meta.loc[student, 'Scale Score']) else ""
-            s_level = student_meta.loc[student, 'Level Score'] if pd.notna(student_meta.loc[student, 'Level Score']) else ""
-            
-            p_rank = student_meta.loc[student, 'Percentile Rank']
-            s_perc = f"{int(p_rank)}%" if pd.notna(p_rank) and str(p_rank).replace('.','',1).isdigit() else (str(p_rank) if pd.notna(p_rank) else "")
-
-            # Metadata top rows
-            meta_rows = pd.DataFrame({
-                (student, 'Points Earned'): [s_504, s_ese, s_esol, s_perc, s_scale, s_level],
-                (student, 'Points Possible'): ["", "", "", "", "", ""],
-                (student, '% Score'): ["", "", "", "", "", ""]
-            }, index=[
-                '504 Status',
-                'ESE (Primary Exceptionality)',
-                'ESOL (English Learner)',
-                'Percentile Rank',
-                'Scale Score',
-                'Performance Level'
-            ])
-
-            # Benchmark performance rows
-            bench_earned = pivot_earned[student]
-            bench_possible = pivot_possible[student]
-            bench_pct = pivot_pct[student].astype(str) + '%'
-
-            bench_rows = pd.DataFrame({
-                (student, 'Points Earned'): bench_earned,
-                (student, 'Points Possible'): bench_possible,
-                (student, '% Score'): bench_pct
-            })
-
-            full_st_df = pd.concat([meta_rows, bench_rows])
-            combined_dfs.append(full_st_df)
-
-        combined_pivot = pd.concat(combined_dfs, axis=1)
-        combined_pivot.columns = pd.MultiIndex.from_tuples(combined_pivot.columns)
+        df_long, combined_pivot = process_fast_file(uploaded_file.getvalue(), uploaded_file.name.lower())
 
         st.success("✅ File processed successfully!")
 
-        # Display preview tabs
         tab1, tab2 = st.tabs(["📋 Long Data Format", "📊 Benchmark & Demographic Summary"])
         with tab1:
             st.dataframe(df_long.head(20))
@@ -170,7 +153,6 @@ if uploaded_file is not None:
             st.write("### Combined Benchmark & Student Demographic Summary")
             st.dataframe(combined_pivot)
 
-        # Build Excel File with 2 worksheets
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             df_long.to_excel(writer, sheet_name='Data', index=False)
