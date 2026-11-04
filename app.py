@@ -46,6 +46,25 @@ def clean_ese_status(val):
     return "Yes"
 
 
+def get_domain(bm):
+    """Extracts high-level domain prefix from benchmark standard."""
+    s = str(bm).strip()
+    parts = s.split('.')
+    if s.startswith('MA.'):
+        if len(parts) >= 2:
+            return f"MA.{parts[1]}"
+    elif len(parts) >= 1:
+        prefix = parts[0].upper()
+        ela_map = {
+            'R': 'R - Reading',
+            'C': 'C - Communication',
+            'V': 'V - Vocabulary',
+            'F': 'F - Foundational Skills'
+        }
+        return ela_map.get(prefix, prefix)
+    return "OTHER"
+
+
 @st.cache_data(show_spinner="Processing and reshaping FAST file...")
 def process_fast_file(file_bytes, file_name):
     # 1. Load File
@@ -134,39 +153,113 @@ def process_fast_file(file_bytes, file_name):
     df_long['Benchmark'] = df_long['Benchmark'].apply(clean_benchmark_code)
     df_long = df_long[(df_long['Benchmark'] != '') & df_long['Points Earned'].notna() & df_long['Points Possible'].notna()].copy()
 
-    # 6. Pivot Table Generation
+    # Add Domain column for hybrid aggregation
+    df_long['Domain'] = df_long['Benchmark'].apply(get_domain)
+
+    # 6. Pivot Calculations for Benchmarks, Domains, and Overall Totals
     pivot_earned = df_long.pivot_table(index='Benchmark', columns='Student Name', values='Points Earned', aggfunc='sum', fill_value=0)
     pivot_possible = df_long.pivot_table(index='Benchmark', columns='Student Name', values='Points Possible', aggfunc='sum', fill_value=0)
-    pivot_pct = (pivot_earned / pivot_possible * 100).replace([float('inf'), -float('inf')], 0).fillna(0).round(1)
+
+    domain_earned = df_long.pivot_table(index='Domain', columns='Student Name', values='Points Earned', aggfunc='sum', fill_value=0)
+    domain_possible = df_long.pivot_table(index='Domain', columns='Student Name', values='Points Possible', aggfunc='sum', fill_value=0)
+
+    overall_earned = df_long.groupby('Student Name')['Points Earned'].sum()
+    overall_possible = df_long.groupby('Student Name')['Points Possible'].sum()
 
     student_meta = df_long.groupby('Student Name').first()
     students = sorted(df_long['Student Name'].unique())
+    domains = sorted(df_long['Domain'].unique())
 
     combined_data = {}
+
+    # Place CLASS / GROUP TOTAL column first
+    combined_data[('CLASS / GROUP TOTAL', 'Points Earned')] = ["Total Students", len(students), "", "", "", ""]
+    combined_data[('CLASS / GROUP TOTAL', 'Points Possible')] = ["", "", "", "", "", ""]
+    combined_data[('CLASS / GROUP TOTAL', '% Score')] = ["", "", "", "", "", ""]
+
+    # Student metadata headers
     for student in students:
         s_504 = student_meta.loc[student, '504']
         s_ese = student_meta.loc[student, 'Primary Exceptionality']
         s_esol = student_meta.loc[student, 'English Learner']
         s_scale = student_meta.loc[student, 'Scale Score'] if pd.notna(student_meta.loc[student, 'Scale Score']) else ""
         s_level = student_meta.loc[student, 'Level Score'] if pd.notna(student_meta.loc[student, 'Level Score']) else ""
-        
         p_rank = student_meta.loc[student, 'Percentile Rank']
         s_perc = f"{int(p_rank)}%" if pd.notna(p_rank) and str(p_rank).replace('.','',1).isdigit() else (str(p_rank) if pd.notna(p_rank) else "")
 
-        combined_data[(student, 'Points Earned')] = [s_504, s_ese, s_esol, s_perc, s_scale, s_level] + pivot_earned[student].tolist()
-        combined_data[(student, 'Points Possible')] = ["", "", "", "", "", ""] + pivot_possible[student].tolist()
-        combined_data[(student, '% Score')] = ["", "", "", "", "", ""] + (pivot_pct[student].astype(str) + '%').tolist()
+        combined_data[(student, 'Points Earned')] = [s_504, s_ese, s_esol, s_perc, s_scale, s_level]
+        combined_data[(student, 'Points Possible')] = ["", "", "", "", "", ""]
+        combined_data[(student, '% Score')] = ["", "", "", "", "", ""]
 
-    row_indices = [
+    row_labels = [
         '504 Status',
         'ESE (Primary Exceptionality)',
         'ESOL (English Learner)',
         'Percentile Rank',
         'Scale Score',
         'Performance Level'
-    ] + pivot_earned.index.tolist()
+    ]
 
-    combined_pivot = pd.DataFrame(combined_data, index=row_indices)
+    # Populate Hybrid Rows (Domain Subtotal -> Individual Standards)
+    for domain in domains:
+        subtotal_label = f"TOTAL: {domain}"
+        row_labels.append(subtotal_label)
+
+        # Domain Class / Group Total
+        c_d_e = domain_earned.loc[domain].sum() if domain in domain_earned.index else 0
+        c_d_p = domain_possible.loc[domain].sum() if domain in domain_possible.index else 0
+        c_d_pct = f"{round((c_d_e / c_d_p * 100), 1)}%" if c_d_p > 0 else "0.0%"
+        combined_data[('CLASS / GROUP TOTAL', 'Points Earned')].append(c_d_e)
+        combined_data[('CLASS / GROUP TOTAL', 'Points Possible')].append(c_d_p)
+        combined_data[('CLASS / GROUP TOTAL', '% Score')].append(c_d_pct)
+
+        # Domain Student Values
+        for student in students:
+            d_e = domain_earned.loc[domain, student] if (domain in domain_earned.index and student in domain_earned.columns) else 0
+            d_p = domain_possible.loc[domain, student] if (domain in domain_possible.index and student in domain_possible.columns) else 0
+            d_pct = f"{round((d_e / d_p * 100), 1)}%" if d_p > 0 else "0.0%"
+            combined_data[(student, 'Points Earned')].append(d_e)
+            combined_data[(student, 'Points Possible')].append(d_p)
+            combined_data[(student, '% Score')].append(d_pct)
+
+        # Individual Benchmarks within Domain
+        bms = sorted(df_long[df_long['Domain'] == domain]['Benchmark'].unique())
+        for bm in bms:
+            row_labels.append(f"  └─ {bm}")
+
+            c_b_e = pivot_earned.loc[bm].sum() if bm in pivot_earned.index else 0
+            c_b_p = pivot_possible.loc[bm].sum() if bm in pivot_possible.index else 0
+            c_b_pct = f"{round((c_b_e / c_b_p * 100), 1)}%" if c_b_p > 0 else "0.0%"
+            combined_data[('CLASS / GROUP TOTAL', 'Points Earned')].append(c_b_e)
+            combined_data[('CLASS / GROUP TOTAL', 'Points Possible')].append(c_b_p)
+            combined_data[('CLASS / GROUP TOTAL', '% Score')].append(c_b_pct)
+
+            for student in students:
+                b_e = pivot_earned.loc[bm, student] if (bm in pivot_earned.index and student in pivot_earned.columns) else 0
+                b_p = pivot_possible.loc[bm, student] if (bm in pivot_possible.index and student in pivot_possible.columns) else 0
+                b_pct = f"{round((b_e / b_p * 100), 1)}%" if b_p > 0 else "0.0%"
+                combined_data[(student, 'Points Earned')].append(b_e)
+                combined_data[(student, 'Points Possible')].append(b_p)
+                combined_data[(student, '% Score')].append(b_pct)
+
+    # Overall Test Total Row
+    row_labels.append("🏆 OVERALL TEST TOTAL")
+    c_o_e = overall_earned.sum()
+    c_o_p = overall_possible.sum()
+    c_o_pct = f"{round((c_o_e / c_o_p * 100), 1)}%" if c_o_p > 0 else "0.0%"
+    combined_data[('CLASS / GROUP TOTAL', 'Points Earned')].append(c_o_e)
+    combined_data[('CLASS / GROUP TOTAL', 'Points Possible')].append(c_o_p)
+    combined_data[('CLASS / GROUP TOTAL', '% Score')].append(c_o_pct)
+
+    for student in students:
+        o_e = overall_earned.loc[student] if student in overall_earned.index else 0
+        o_p = overall_possible.loc[student] if student in overall_possible.index else 0
+        o_pct = f"{round((o_e / o_p * 100), 1)}%" if o_p > 0 else "0.0%"
+        combined_data[(student, 'Points Earned')].append(o_e)
+        combined_data[(student, 'Points Possible')].append(o_p)
+        combined_data[(student, '% Score')].append(o_pct)
+
+    combined_pivot = pd.DataFrame(combined_data, index=row_labels)
     combined_pivot.columns = pd.MultiIndex.from_tuples(combined_pivot.columns)
 
     return df_long, combined_pivot
@@ -178,7 +271,7 @@ if uploaded_file is not None:
 
         st.success("✅ File processed successfully!")
 
-        # Display preview tabs in UI
+        # Preview tabs
         tab1, tab2 = st.tabs(["📊 Benchmark & Demographic Summary", "📋 Long Data Format (Preview Only)"])
         with tab1:
             st.write("### Combined Benchmark & Student Demographic Summary")
@@ -186,7 +279,7 @@ if uploaded_file is not None:
         with tab2:
             st.dataframe(df_long.head(20))
 
-        # Build Excel File with ONLY 1 worksheet (Summary)
+        # Build Excel File with Summary sheet
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             combined_pivot.to_excel(writer, sheet_name='Benchmark Summary')
