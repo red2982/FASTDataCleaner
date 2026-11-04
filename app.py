@@ -36,6 +36,51 @@ def clean_benchmark_code(val):
     return s
 
 
+def resolve_metadata_columns(df_columns):
+    """Matches raw file headers to expected metadata aliases."""
+    aliases = {
+        "Student Name": ['student name', 'full name', 'student_name', 'name'],
+        "504": ['504 status', 'section 504', '504 plan', '504'],
+        "Primary Exceptionality": ['primary exceptionality', 'exceptionality', 'ese status', 'ese', 'primary_exceptionality'],
+        "English Learner": ['english learner', 'english language learner', 'ell status', 'esol status', 'ell', 'esol', 'lep'],
+        "Scale Score": ['scale score', 'overall scale score', 'scalescore', 'scale_score', 'ss'],
+        "Level Score": ['performance level', 'achievement level', 'level score', 'level_score', 'level'],
+        "Percentile Rank": ['percentile rank', 'percentile_rank', 'percentile', 'state percentile', 'pr']
+    }
+
+    resolved = {}
+    used_cols = set()
+
+    # Exact string match (case-insensitive)
+    for target, alias_list in aliases.items():
+        for col in df_columns:
+            if col in used_cols:
+                continue
+            col_clean = str(col).strip().lower()
+            if col_clean in [a.lower() for a in alias_list]:
+                resolved[target] = col
+                used_cols.add(col)
+                break
+
+    # Substring match fallback
+    for target, alias_list in aliases.items():
+        if target in resolved:
+            continue
+        for col in df_columns:
+            if col in used_cols:
+                continue
+            col_clean = str(col).strip().lower()
+            for alias in alias_list:
+                if alias.lower() in col_clean:
+                    resolved[target] = col
+                    used_cols.add(col)
+                    break
+            if target in resolved:
+                break
+
+    return resolved, used_cols
+
+
 @st.cache_data(show_spinner="Processing and reshaping file...")
 def process_fast_file(file_bytes, file_name):
     # 1. Load File
@@ -44,7 +89,10 @@ def process_fast_file(file_bytes, file_name):
     else:
         df_raw = pd.read_excel(io.BytesIO(file_bytes))
 
-    # 2. Disability Map
+    # Strip white spaces from column headers
+    df_raw.columns = [str(c).strip() for c in df_raw.columns]
+
+    # 2. Map Disability Codes
     disability_codes = [
         'K - Specific Learning Disability', 'J - Emotional/Behavioral Disability',
         'P - Autism Spectrum Disorder', 'L - Gifted', 'V - Other Health Impaired',
@@ -56,31 +104,45 @@ def process_fast_file(file_bytes, file_name):
     disability_map = {'N - N/A': 'No', **{code: 'Yes' for code in disability_codes}}
     df_raw = df_raw.replace(disability_map)
 
-    # 3. Separate Metadata vs Benchmark Columns
-    meta_col_names = [
+    # 3. Resolve Metadata Columns Safely
+    resolved_meta, used_meta_cols = resolve_metadata_columns(df_raw.columns)
+    
+    meta_order = [
         "Student Name", "504", "Primary Exceptionality", "English Learner",
         "Scale Score", "Level Score", "Percentile Rank"
     ]
 
+    # Build standardized metadata DataFrame
+    meta_df = pd.DataFrame(index=df_raw.index)
+    for target in meta_order:
+        if target in resolved_meta:
+            meta_df[target] = df_raw[resolved_meta[target]]
+        else:
+            meta_df[target] = ""  # Default blank if column not in raw file
+
+    # 4. Identify Benchmark Columns
     static_cols_to_delete = [
-        'Student ID', 'Student DOB', 'Ethnicity', 'Enrolled Grade', 'Sex', 'Enrolled School',
-        'Enrolled District', 'Local ID', 'Testing Location', 'District Use', 'Test Reason',
-        'Test OppNumber', 'Date Taken', 'Test Completion Date'
+        'student id', 'student dob', 'ethnicity', 'enrolled grade', 'sex', 'enrolled school',
+        'enrolled district', 'local id', 'testing location', 'district use', 'test reason',
+        'test oppnumber', 'date taken', 'test completion date'
     ]
 
-    bench_cols = [
-        c for c in df_raw.columns 
-        if c not in meta_col_names 
-        and c not in static_cols_to_delete 
-        and 'Performance' not in str(c) 
-        and 'Category' not in str(c)
-    ]
+    bench_cols = []
+    for c in df_raw.columns:
+        c_lower = str(c).strip().lower()
+        if c in used_meta_cols:
+            continue
+        if any(s in c_lower for s in static_cols_to_delete):
+            continue
+        if 'performance' in c_lower or 'category' in c_lower:
+            continue
+        bench_cols.append(c)
 
     num_triplets = len(bench_cols) // 3
     valid_bench_cols = bench_cols[:num_triplets * 3]
 
-    # 4. Fast Vectorized Unpivoting via NumPy
-    meta_vals = df_raw[meta_col_names].values
+    # 5. Fast Vectorized Unpivoting via NumPy
+    meta_vals = meta_df.values
     bench_vals = df_raw[valid_bench_cols].values
 
     if num_triplets > 0:
@@ -90,7 +152,7 @@ def process_fast_file(file_bytes, file_name):
     else:
         flat_matrix = np.empty((0, 10))
 
-    headers = meta_col_names + ["Benchmark", "Points Earned", "Points Possible"]
+    headers = meta_order + ["Benchmark", "Points Earned", "Points Possible"]
     df_long = pd.DataFrame(flat_matrix, columns=headers)
 
     # Convert numeric types safely
@@ -101,7 +163,7 @@ def process_fast_file(file_bytes, file_name):
     df_long['Benchmark'] = df_long['Benchmark'].apply(clean_benchmark_code)
     df_long = df_long[(df_long['Benchmark'] != '') & df_long['Points Earned'].notna() & df_long['Points Possible'].notna()].copy()
 
-    # 5. Fast Pivot Table Creation
+    # 6. Fast Pivot Table Creation
     pivot_earned = df_long.pivot_table(index='Benchmark', columns='Student Name', values='Points Earned', aggfunc='sum', fill_value=0)
     pivot_possible = df_long.pivot_table(index='Benchmark', columns='Student Name', values='Points Possible', aggfunc='sum', fill_value=0)
     pivot_pct = (pivot_earned / pivot_possible * 100).replace([float('inf'), -float('inf')], 0).fillna(0).round(1)
@@ -109,7 +171,6 @@ def process_fast_file(file_bytes, file_name):
     student_meta = df_long.groupby('Student Name').first()
     students = sorted(df_long['Student Name'].unique())
 
-    # Build MultiIndex dictionary directly (Instant performance)
     combined_data = {}
     for student in students:
         s_504 = student_meta.loc[student, '504']
